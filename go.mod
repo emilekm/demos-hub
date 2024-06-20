@@ -1,4 +1,4 @@
-module github.com/prbf2-tools/demos-hub
+module github.com/emilekm/demos-hub
 
 go 1.22.4
 
