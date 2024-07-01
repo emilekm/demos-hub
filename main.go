@@ -81,30 +81,41 @@ type ServersAPI struct {
 	uploadURL string
 }
 
+type server struct {
+	ID string `json:"id"`
+}
+
 func (s *ServersAPI) Servers(w http.ResponseWriter, r *http.Request) {
-	serversDirs, err := os.ReadDir(s.uploadDir)
+	dirs, err := os.ReadDir(s.uploadDir)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	servers := make([]string, 0)
-	for _, server := range serversDirs {
-		if !server.IsDir() {
+	servers := make([]server, 0)
+	for _, dir := range dirs {
+		if !dir.IsDir() {
 			continue
 		}
 
-		servers = append(servers, server.Name())
+		servers = append(servers, server{
+			ID: dir.Name(),
+		})
 	}
 
 	payload := struct {
-		Servers []string `json:"servers"`
+		Servers []server `json:"servers"`
 	}{
 		Servers: servers,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(payload)
+}
+
+type serverFile struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
 }
 
 func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
@@ -121,17 +132,20 @@ func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverFiles := make([]string, 0)
+	serverFiles := make([]serverFile, 0)
 	for _, file := range files {
 		if file.IsDir() {
 			continue
 		}
 
-		serverFiles = append(serverFiles, path.Join(s.uploadURL, server, file.Name()))
+		serverFiles = append(serverFiles, serverFile{
+			Name: file.Name(),
+			URL:  path.Join(s.uploadURL, server, file.Name()),
+		})
 	}
 
 	payload := struct {
-		Files []string `json:"files"`
+		Files []serverFile `json:"files"`
 	}{
 		Files: serverFiles,
 	}
@@ -193,22 +207,15 @@ func (s *ServersAPI) UploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := struct {
-		Server struct {
-			ID string `json:"id"`
-		} `json:"server"`
-		File struct {
-			URL string `json:"url"`
-		} `json:"file"`
+		Server server     `json:"server"`
+		File   serverFile `json:"file"`
 	}{
-		Server: struct {
-			ID string `json:"id"`
-		}{
+		Server: server{
 			ID: serverID,
 		},
-		File: struct {
-			URL string `json:"url"`
-		}{
-			URL: path.Join(s.uploadURL, serverID, header.Filename),
+		File: serverFile{
+			Name: header.Filename,
+			URL:  path.Join(s.uploadURL, serverID, header.Filename),
 		},
 	}
 
