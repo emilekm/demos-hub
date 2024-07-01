@@ -4,11 +4,15 @@ import (
 	"os"
 
 	"github.com/goccy/go-yaml"
+	"github.com/google/uuid"
 )
 
 type Config struct {
-	UploadDir  string `yaml:"uploadDir"`
-	ListenAddr string `yaml:"listenAddr"`
+	ListenAddr string    `yaml:"listenAddr"`
+	SpaceUUID  uuid.UUID `yaml:"spaceUUID"`
+
+	UploadDir string `yaml:"uploadDir"`
+	UploadURL string `yaml:"uploadURL"`
 }
 
 func New(filename string) (*Config, error) {

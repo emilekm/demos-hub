@@ -5,11 +5,16 @@ import (
 	"flag"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"time"
 
-	"github.com/prbf2-tools/demos-hub/internal/config"
+	"github.com/emilekm/demos-hub/internal/config"
+	"github.com/emilekm/demos-hub/internal/rmod"
+	"github.com/google/uuid"
 )
 
 var configFile string
@@ -32,12 +37,14 @@ func run() error {
 
 	serversAPI := &ServersAPI{
 		uploadDir: cfg.UploadDir,
+		uploadURL: cfg.UploadURL,
+		space:     cfg.SpaceUUID,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /servers", serversAPI.Servers)
+	mux.HandleFunc("POST /upload", WithLogging(serversAPI.UploadFile))
 	mux.HandleFunc("GET /servers/{server}", serversAPI.ServerFiles)
-	mux.HandleFunc("POST /servers/{server}", serversAPI.UploadFile)
 
 	log.Printf("Listening on %s", cfg.ListenAddr)
 
@@ -48,8 +55,30 @@ func run() error {
 	return nil
 }
 
+func WithLogging(h http.HandlerFunc) http.HandlerFunc {
+	logFn := func(rw http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		uri := r.RequestURI
+		method := r.Method
+		h.ServeHTTP(rw, r) // serve the original request
+
+		duration := time.Since(start)
+
+		// log request details
+		slog.Info("",
+			"uri", uri,
+			"method", method,
+			"duration", duration,
+		)
+	}
+	return logFn
+}
+
 type ServersAPI struct {
+	space     uuid.UUID
 	uploadDir string
+	uploadURL string
 }
 
 func (s *ServersAPI) Servers(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +127,7 @@ func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		serverFiles = append(serverFiles, file.Name())
+		serverFiles = append(serverFiles, path.Join(s.uploadURL, server, file.Name()))
 	}
 
 	payload := struct {
@@ -112,31 +141,55 @@ func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ServersAPI) UploadFile(w http.ResponseWriter, r *http.Request) {
-	server := r.PathValue("server")
-	if server == "" {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+	ip := r.Header.Get("X-PRHub-IP")
+	port := r.Header.Get("X-PRHub-Port")
+	license := r.Header.Get("X-PRHub-License")
+	if ip == "" || port == "" || license == "" {
+		http.Error(w, "Missing headers", http.StatusUnauthorized)
 		return
 	}
+
+	valid, err := rmod.ValidateLicense(ip, port, license)
+	if err != nil || !valid {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	serverID := s.serverID(license)
 
 	attachment, header, err := r.FormFile("prdemo")
 	defer attachment.Close()
 	if err != nil {
+		slog.Error("failed to read form file", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	file, err := os.Create(filepath.Join(s.uploadDir, server, header.Filename))
+	err = os.MkdirAll(filepath.Join(s.uploadDir, serverID), 0755)
+	if err != nil {
+		slog.Error("failed to create server dir", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	file, err := os.Create(filepath.Join(s.uploadDir, serverID, header.Filename))
 	defer file.Close()
 	if err != nil {
+		slog.Error("failed to create file", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	_, err = io.Copy(file, attachment)
 	if err != nil {
+		slog.Error("failed to write file", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *ServersAPI) serverID(license string) string {
+	return uuid.NewMD5(s.space, []byte(license)).String()
 }
