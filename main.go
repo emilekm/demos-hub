@@ -137,7 +137,12 @@ func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(payload)
+	err = json.NewEncoder(w).Encode(payload)
+	if err != nil {
+		slog.Error("failed to encode response", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *ServersAPI) UploadFile(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +192,34 @@ func (s *ServersAPI) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	payload := struct {
+		Server struct {
+			ID string `json:"id"`
+		} `json:"server"`
+		File struct {
+			URL string `json:"url"`
+		} `json:"file"`
+	}{
+		Server: struct {
+			ID string `json:"id"`
+		}{
+			ID: serverID,
+		},
+		File: struct {
+			URL string `json:"url"`
+		}{
+			URL: path.Join(s.uploadURL, serverID, header.Filename),
+		},
+	}
+
 	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(payload)
+	if err != nil {
+		slog.Error("failed to encode response", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *ServersAPI) serverID(license string) string {
