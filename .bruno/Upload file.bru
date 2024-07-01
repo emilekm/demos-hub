@@ -1,0 +1,21 @@
+meta {
+  name: Upload file
+  type: http
+  seq: 4
+}
+
+post {
+  url: http://localhost:8080/upload
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-PRHub-IP: 127.0.0.1
+  X-PRHub-Port: 16567
+  X-PRHub-License: license-key
+}
+
+body:multipart-form {
+  prdemo: @file(/home/cas/pr/demos/tracker_2024_03_28_19_32_04_yamalia_gpm_cq_32.PRdemo)
+}
