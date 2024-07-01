@@ -5,15 +5,15 @@ meta {
 }
 
 post {
-  url: http://localhost:8080/upload
+  url: http://{{hubAddr}}/upload
   body: multipartForm
   auth: none
 }
 
 headers {
-  X-PRHub-IP: 127.0.0.1
+  X-PRHub-IP: {{serverIP}}
   X-PRHub-Port: 16567
-  X-PRHub-License: license-key
+  X-PRHub-License: {{licenseKey}}
 }
 
 body:multipart-form {
