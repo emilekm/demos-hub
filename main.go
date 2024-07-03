@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/emilekm/demos-hub/internal/api"
 	v1 "github.com/emilekm/demos-hub/internal/api/v1"
 	"github.com/emilekm/demos-hub/internal/config"
+	"github.com/emilekm/demos-hub/internal/storage"
 )
 
 var configFile string
@@ -29,12 +31,11 @@ func run() error {
 		return err
 	}
 
-	serversAPI := v1.NewServers(cfg.SpaceUUID, cfg.UploadDir, cfg.UploadURL)
+	store := storage.NewStorage(cfg.UploadDir)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /servers", serversAPI.Servers)
-	mux.HandleFunc("POST /upload", WithLogging(serversAPI.UploadFile))
-	mux.HandleFunc("GET /servers/{server}", serversAPI.ServerFiles)
+	serversAPI := v1.NewServers(store, cfg.SpaceUUID, cfg.UploadURL)
+
+	mux := api.Routes(serversAPI)
 
 	log.Printf("Listening on %s", cfg.ListenAddr)
 

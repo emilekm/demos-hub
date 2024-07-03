@@ -2,29 +2,37 @@ package v1
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path"
-	"path/filepath"
 
 	"github.com/emilekm/demos-hub/internal/rmod"
+	"github.com/emilekm/demos-hub/internal/storage"
 	"github.com/google/uuid"
 )
 
 type Servers struct {
+	storage   *storage.Storage
 	space     uuid.UUID
-	uploadDir string
 	uploadURL string
 }
 
-func NewServers(space uuid.UUID, uploadDir, uploadURL string) *Servers {
+func NewServers(storage *storage.Storage, space uuid.UUID, uploadURL string) *Servers {
 	return &Servers{
 		space:     space,
-		uploadDir: uploadDir,
+		storage:   storage,
 		uploadURL: uploadURL,
 	}
+}
+
+func (s *Servers) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /upload", s.UploadFile)
+	mux.HandleFunc("GET /servers", s.Servers)
+	mux.HandleFunc("GET /servers/{serverID}", s.ServerFiles)
+
+	return mux
 }
 
 type server struct {
@@ -32,21 +40,18 @@ type server struct {
 }
 
 func (s *Servers) Servers(w http.ResponseWriter, r *http.Request) {
-	dirs, err := os.ReadDir(s.uploadDir)
+	serversList, err := s.storage.ListServers()
 	if err != nil {
+		slog.Error("failed to list servers", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	servers := make([]server, 0)
-	for _, dir := range dirs {
-		if !dir.IsDir() {
-			continue
+	servers := make([]server, len(serversList))
+	for i, serverID := range serversList {
+		servers[i] = server{
+			ID: serverID,
 		}
-
-		servers = append(servers, server{
-			ID: dir.Name(),
-		})
 	}
 
 	payload := struct {
@@ -65,28 +70,23 @@ type serverFile struct {
 }
 
 func (s *Servers) ServerFiles(w http.ResponseWriter, r *http.Request) {
-	server := r.PathValue("server")
-	if server == "" {
+	serverID := r.PathValue("serverID")
+	if serverID == "" {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
-	serverDir := filepath.Join(s.uploadDir, server)
-	files, err := os.ReadDir(serverDir)
+	files, err := s.storage.ListServerFiles(serverID)
 	if err != nil {
 		http.Error(w, "Server doesn't exist", http.StatusBadRequest)
 		return
 	}
 
-	serverFiles := make([]serverFile, 0)
+	serverFiles := make([]serverFile, len(files))
 	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
 		serverFiles = append(serverFiles, serverFile{
-			Name: file.Name(),
-			URL:  path.Join(s.uploadURL, server, file.Name()),
+			Name: file,
+			URL:  path.Join(s.uploadURL, serverID, file),
 		})
 	}
 
@@ -130,24 +130,9 @@ func (s *Servers) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = os.MkdirAll(filepath.Join(s.uploadDir, serverID), 0755)
+	err = s.storage.SaveFile(serverID, header.Filename, attachment)
 	if err != nil {
-		slog.Error("failed to create server dir", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	file, err := os.Create(filepath.Join(s.uploadDir, serverID, header.Filename))
-	defer file.Close()
-	if err != nil {
-		slog.Error("failed to create file", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = io.Copy(file, attachment)
-	if err != nil {
-		slog.Error("failed to write file", "err", err)
+		slog.Error("failed to save file", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
