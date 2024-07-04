@@ -123,12 +123,12 @@ func (s *Servers) UploadFile(w http.ResponseWriter, r *http.Request) {
 	serverID := s.serverID(license)
 
 	attachment, header, err := r.FormFile("prdemo")
-	defer attachment.Close()
 	if err != nil {
 		slog.Error("failed to read form file", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	defer attachment.Close()
 
 	err = s.storage.SaveFile(serverID, header.Filename, attachment)
 	if err != nil {
