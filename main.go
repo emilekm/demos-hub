@@ -1,20 +1,17 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
-	"io"
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
-	"path"
-	"path/filepath"
 	"time"
 
+	"github.com/emilekm/demos-hub/internal/api"
+	v1 "github.com/emilekm/demos-hub/internal/api/v1"
 	"github.com/emilekm/demos-hub/internal/config"
-	"github.com/emilekm/demos-hub/internal/rmod"
-	"github.com/google/uuid"
+	"github.com/emilekm/demos-hub/internal/storage"
+	"github.com/minio/minio-go"
 )
 
 var configFile string
@@ -35,16 +32,16 @@ func run() error {
 		return err
 	}
 
-	serversAPI := &ServersAPI{
-		uploadDir: cfg.UploadDir,
-		uploadURL: cfg.UploadURL,
-		space:     cfg.SpaceUUID,
+	minioClient, err := minio.New(cfg.Minio.Endpoint, cfg.Minio.AccessKey, cfg.Minio.SecretKey, true)
+	if err != nil {
+		return err
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /servers", serversAPI.Servers)
-	mux.HandleFunc("POST /upload", WithLogging(serversAPI.UploadFile))
-	mux.HandleFunc("GET /servers/{server}", serversAPI.ServerFiles)
+	store := storage.NewStorage(minioClient)
+
+	serversAPI := v1.NewServers(store, cfg.SpaceUUID, "")
+
+	mux := api.Routes(serversAPI)
 
 	log.Printf("Listening on %s", cfg.ListenAddr)
 
@@ -73,162 +70,4 @@ func WithLogging(h http.HandlerFunc) http.HandlerFunc {
 		)
 	}
 	return logFn
-}
-
-type ServersAPI struct {
-	space     uuid.UUID
-	uploadDir string
-	uploadURL string
-}
-
-type server struct {
-	ID string `json:"id"`
-}
-
-func (s *ServersAPI) Servers(w http.ResponseWriter, r *http.Request) {
-	dirs, err := os.ReadDir(s.uploadDir)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	servers := make([]server, 0)
-	for _, dir := range dirs {
-		if !dir.IsDir() {
-			continue
-		}
-
-		servers = append(servers, server{
-			ID: dir.Name(),
-		})
-	}
-
-	payload := struct {
-		Servers []server `json:"servers"`
-	}{
-		Servers: servers,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(payload)
-}
-
-type serverFile struct {
-	URL  string `json:"url"`
-	Name string `json:"name"`
-}
-
-func (s *ServersAPI) ServerFiles(w http.ResponseWriter, r *http.Request) {
-	server := r.PathValue("server")
-	if server == "" {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	serverDir := filepath.Join(s.uploadDir, server)
-	files, err := os.ReadDir(serverDir)
-	if err != nil {
-		http.Error(w, "Server doesn't exist", http.StatusBadRequest)
-		return
-	}
-
-	serverFiles := make([]serverFile, 0)
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		serverFiles = append(serverFiles, serverFile{
-			Name: file.Name(),
-			URL:  path.Join(s.uploadURL, server, file.Name()),
-		})
-	}
-
-	payload := struct {
-		Files []serverFile `json:"files"`
-	}{
-		Files: serverFiles,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(payload)
-	if err != nil {
-		slog.Error("failed to encode response", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-func (s *ServersAPI) UploadFile(w http.ResponseWriter, r *http.Request) {
-	ip := r.Header.Get("X-PRHub-IP")
-	port := r.Header.Get("X-PRHub-Port")
-	license := r.Header.Get("X-PRHub-License")
-	if ip == "" || port == "" || license == "" {
-		http.Error(w, "Missing headers", http.StatusUnauthorized)
-		return
-	}
-
-	valid, err := rmod.ValidateLicense(ip, port, license)
-	if err != nil || !valid {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	serverID := s.serverID(license)
-
-	attachment, header, err := r.FormFile("prdemo")
-	defer attachment.Close()
-	if err != nil {
-		slog.Error("failed to read form file", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	err = os.MkdirAll(filepath.Join(s.uploadDir, serverID), 0755)
-	if err != nil {
-		slog.Error("failed to create server dir", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	file, err := os.Create(filepath.Join(s.uploadDir, serverID, header.Filename))
-	defer file.Close()
-	if err != nil {
-		slog.Error("failed to create file", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = io.Copy(file, attachment)
-	if err != nil {
-		slog.Error("failed to write file", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	payload := struct {
-		Server server     `json:"server"`
-		File   serverFile `json:"file"`
-	}{
-		Server: server{
-			ID: serverID,
-		},
-		File: serverFile{
-			Name: header.Filename,
-			URL:  path.Join(s.uploadURL, serverID, header.Filename),
-		},
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(payload)
-	if err != nil {
-		slog.Error("failed to encode response", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-func (s *ServersAPI) serverID(license string) string {
-	return uuid.NewMD5(s.space, []byte(license)).String()
 }
