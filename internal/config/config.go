@@ -7,12 +7,17 @@ import (
 	"github.com/google/uuid"
 )
 
+type MinioConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	AccessKey string `yaml:"accessKey"`
+	SecretKey string `yaml:"secretKey"`
+}
+
 type Config struct {
 	ListenAddr string    `yaml:"listenAddr"`
 	SpaceUUID  uuid.UUID `yaml:"spaceUUID"`
 
-	UploadDir string `yaml:"uploadDir"`
-	UploadURL string `yaml:"uploadURL"`
+	Minio MinioConfig `yaml:"minio"`
 }
 
 func New(filename string) (*Config, error) {

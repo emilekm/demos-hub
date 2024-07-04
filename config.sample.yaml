@@ -1,4 +1,7 @@
-uploadDir: ./uploads
 listenAddr: ":8080"
 spaceUUID:
-uploadURL: http://localhost/hub/files
+
+minio:
+  endpoint:
+  accessKey:
+  secretKey:

@@ -1,70 +1,82 @@
 package storage
 
 import (
+	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"strings"
+
+	"github.com/minio/minio-go"
+	"github.com/pkg/errors"
+)
+
+const (
+	bucketNamePrefix = "demos-hub-server"
 )
 
 type Storage struct {
 	uploadDir string
+	client    *minio.Client
 }
 
-func NewStorage(uploadDir string) *Storage {
+func NewStorage(client *minio.Client) *Storage {
 	return &Storage{
-		uploadDir: uploadDir,
+		client: client,
 	}
 }
 
 func (s *Storage) SaveFile(serverID, filename string, file io.Reader) error {
-	err := os.MkdirAll(filepath.Join(s.uploadDir, serverID), 0755)
+	name := bucketName(serverID)
+	exists, err := s.client.BucketExists(name)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to check if bucket exists")
 	}
 
-	osFile, err := os.Create(filepath.Join(s.uploadDir, serverID, filename))
-	if err != nil {
-		return err
+	if !exists {
+		err = s.client.MakeBucket(name, "")
+		if err != nil {
+			return errors.Wrap(err, "failed to create bucket")
+		}
 	}
-	defer osFile.Close()
 
-	_, err = io.Copy(osFile, file)
-	return err
+	_, err = s.client.PutObject(name, filename, file, -1, minio.PutObjectOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to upload file")
+	}
+
+	return nil
 }
 
 func (s *Storage) ListServers() ([]string, error) {
-	dirs, err := os.ReadDir(s.uploadDir)
+	buckets, err := s.client.ListBuckets()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to list buckets")
 	}
 
 	var servers []string
-	for _, dir := range dirs {
-		if !dir.IsDir() {
-			continue
+	for _, bucket := range buckets {
+		if strings.HasPrefix(bucket.Name, bucketNamePrefix) {
+			servers = append(servers, strings.TrimPrefix(bucket.Name, bucketNamePrefix+"-"))
 		}
-
-		servers = append(servers, dir.Name())
 	}
 
 	return servers, nil
 }
 
 func (s *Storage) ListServerFiles(serverID string) ([]string, error) {
-	serverDir := filepath.Join(s.uploadDir, serverID)
-	files, err := os.ReadDir(serverDir)
-	if err != nil {
-		return nil, err
-	}
+	objectsCh := s.client.ListObjects(bucketName(serverID), "", true, nil)
 
 	var serverFiles []string
-	for _, file := range files {
-		if file.IsDir() {
-			continue
+	for object := range objectsCh {
+		if object.Err != nil {
+			return nil, errors.Wrap(object.Err, "failed to list objects")
 		}
 
-		serverFiles = append(serverFiles, file.Name())
+		serverFiles = append(serverFiles, object.Key)
 	}
 
 	return serverFiles, nil
+}
+
+func bucketName(serverID string) string {
+	return fmt.Sprintf("%s-%s", bucketNamePrefix, serverID)
 }

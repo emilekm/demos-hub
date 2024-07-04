@@ -11,6 +11,7 @@ import (
 	v1 "github.com/emilekm/demos-hub/internal/api/v1"
 	"github.com/emilekm/demos-hub/internal/config"
 	"github.com/emilekm/demos-hub/internal/storage"
+	"github.com/minio/minio-go"
 )
 
 var configFile string
@@ -31,9 +32,14 @@ func run() error {
 		return err
 	}
 
-	store := storage.NewStorage(cfg.UploadDir)
+	minioClient, err := minio.New(cfg.Minio.Endpoint, cfg.Minio.AccessKey, cfg.Minio.SecretKey, true)
+	if err != nil {
+		return err
+	}
 
-	serversAPI := v1.NewServers(store, cfg.SpaceUUID, cfg.UploadURL)
+	store := storage.NewStorage(minioClient)
+
+	serversAPI := v1.NewServers(store, cfg.SpaceUUID, "")
 
 	mux := api.Routes(serversAPI)
 

@@ -83,11 +83,11 @@ func (s *Servers) ServerFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serverFiles := make([]serverFile, len(files))
-	for _, file := range files {
-		serverFiles = append(serverFiles, serverFile{
+	for i, file := range files {
+		serverFiles[i] = serverFile{
 			Name: file,
 			URL:  path.Join(s.uploadURL, serverID, file),
-		})
+		}
 	}
 
 	payload := struct {
